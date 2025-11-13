@@ -170,7 +170,7 @@ def anomaly_alerts_block(df_daily: pd.DataFrame, title_latest_day: str, filename
 def prepare_import_data(import_files, provider_map):
     """
     读取上传的 import xlsx 文件，合并 provider_map，解析日期，构造 provider_label，
-    并且忽略 ProviderId == 'BBPIRCh' 的全部数据。
+    并忽略 ProviderId == 'BBPIRCh' 的全部数据。
     """
     import_data = pd.DataFrame()
     if import_files:
@@ -314,8 +314,8 @@ elif menu == "功能 2：仅工作日":
                 fig.update_xaxes(type="category", categoryorder="category ascending", tickangle=-45)
                 st.plotly_chart(fig, use_container_width=True)
 
+            # ←←← 这里是之前报错的位置，务必确保缩进存在
             if all_group_data:
-        # ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓ 这里务必保持缩进 ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
                 export_excel(pd.concat(all_group_data), "趋势_仅工作日.xlsx")
 
 # =========================
@@ -409,3 +409,4 @@ elif menu == "功能 4：全部数据":
                 st.plotly_chart(fig, use_container_width=True)
 
             if all_group_data:
+                export_excel(pd.concat(all_group_data), "趋势_全部数据.xlsx")
