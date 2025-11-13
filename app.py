@@ -5,49 +5,53 @@ import os
 from io import BytesIO
 
 # =========================
-# 页面配置与样式（字号优化 + 图标友好）
+# 页面配置与样式
 # =========================
-st.set_page_config(page_title="资讯平台数据分析", layout="wide")
+st.set_page_config(page_title="MSN Provider Insight", layout="wide")
 
-# 全局样式：控制标题字号（适当增大），并提供自定义类
+# 全局样式：主标题顶格、字号加倍；功能页标题更醒目；移除功能描述（保留更小字号样式但不显示）
 st.markdown("""
 <style>
-/* 全局标题基础（适中） */
-h1 { font-size: 1.25rem !important; }
-h2 { font-size: 1.15rem !important; }
-h3 { font-size: 1.05rem !important; }
+/* 顶部主标题：字号加倍、顶格，减少上方留白 */
+.app-main-title h1 {
+    font-size: 2.50rem !important;   /* 加倍 */
+    font-weight: 800;
+    margin: 0 !important;
+    padding: 0 !important;
+}
 
-/* 功能页顶端标题（增大约一半，突出每页主标题） */
+/* 功能页标题（较大但不夸张） */
 .page-title {
-    font-size: 1.60rem !important; /* 原基础上增大约一半 */
+    font-size: 1.60rem !important;
     font-weight: 700;
-    margin: 0.25rem 0 0.75rem 0;
+    margin: 0.2rem 0 0.6rem 0;
 }
 
-/* 功能描述（与功能页顶端标题同字号，简洁说明当前页） */
+/* 功能描述（比原来小约 1/3，当前不展示） */
 .page-subtitle {
-    font-size: 1.60rem !important; /* 与 page-title 同字号 */
+    font-size: 1.05rem !important;    /* 缩小约 1/3 */
     font-weight: 600;
-    color: #444;
-    margin: 0 0 0.75rem 0;
+    color: #555;
+    margin: 0 0 0.5rem 0;
+    display: none; /* 当前不显示描述 */
 }
 
-/* 报警区域的样式适当紧凑 */
+/* 报警区域样式 */
 .alert-exclam { color: #d00000; font-weight: 800; font-size: 16px; margin-right: 6px; }
 .alert-line { font-size: 14px; line-height: 1.6; }
 .alert-box { padding: 8px 10px; background-color: #fff5f5; border-left: 4px solid #d00000; border-radius: 6px; margin-bottom: 12px; }
 
-/* 小标题（组别） */
+/* 分组小标题 */
 .section-title {
     font-size: 1.05rem !important;
     font-weight: 600;
-    margin: 0.5rem 0 0.5rem 0;
+    margin: 0.4rem 0 0.4rem 0;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# 顶部主标题（适中）
-st.title("📊 资讯平台文章审核数据分析")
+# 顶部主标题
+st.markdown("<div class='app-main-title'><h1>MSN Provider Insight</h1></div>", unsafe_allow_html=True)
 
 # =========================
 # 菜单（四个顶级功能）
@@ -125,7 +129,6 @@ def anomaly_alerts_block(df_daily: pd.DataFrame, title_latest_day: str, filename
     latest_df = df_daily[df_daily["date"] == latest_date].copy()
     history_df = df_daily[df_daily["date"] < latest_date].copy()
 
-    # 报警区域样式已在全局 CSS 定义
     if history_df.empty:
         st.markdown(
             f"<div class='alert-box'>仅有{title_latest_day} {pd.to_datetime(latest_date).strftime('%Y/%m/%d')}，无历史对比</div>",
@@ -244,7 +247,6 @@ holidays_set = load_holidays_set(holidays_file)
 # =========================
 if menu == "功能 1：单日分析":
     st.markdown("<div class='page-title'>🗓️📊 单日分析</div>", unsafe_allow_html=True)
-    st.markdown("<div class='page-subtitle'>单日数据总览</div>", unsafe_allow_html=True)
 
     if import_data.empty:
         st.warning("请上传汇入量文件")
@@ -273,7 +275,6 @@ if menu == "功能 1：单日分析":
 # =========================
 elif menu == "功能 2：仅工作日":
     st.markdown("<div class='page-title'>🧑‍💼📈 仅工作日</div>", unsafe_allow_html=True)
-    st.markdown("<div class='page-subtitle'>仅统计周一至周五</div>", unsafe_allow_html=True)
 
     if import_data.empty:
         st.warning("请上传汇入量文件")
@@ -327,7 +328,6 @@ elif menu == "功能 2：仅工作日":
 # =========================
 elif menu == "功能 3：仅周末":
     st.markdown("<div class='page-title'>🛌📈 仅周末</div>", unsafe_allow_html=True)
-    st.markdown("<div class='page-subtitle'>仅统计周六与周日</div>", unsafe_allow_html=True)
 
     if import_data.empty:
         st.warning("请上传汇入量文件")
@@ -374,7 +374,6 @@ elif menu == "功能 3：仅周末":
 # =========================
 elif menu == "功能 4：全部数据":
     st.markdown("<div class='page-title'>📚📈 全部数据</div>", unsafe_allow_html=True)
-    st.markdown("<div class='page-subtitle'>统计全部上传数据</div>", unsafe_allow_html=True)
 
     if import_data.empty:
         st.warning("请上传汇入量文件")
