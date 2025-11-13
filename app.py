@@ -304,7 +304,7 @@ elif menu == "功能 2：仅工作日":
                             .sum().reset_index().rename(columns={"date_parsed": "date"}))
             anomaly_alerts_block(daily_import, "最新工作日", "仅工作日", alert_threshold_pct)
 
-            # 趋势图：X 轴显示每天日期（用字符串分类轴，确保每日显示）
+            # 趋势图：X 轴显示每天日期（分类轴）
             trend_data = (df.groupby(["date_parsed", "provider_label"], dropna=False)["importcount"]
                           .sum().reset_index().rename(columns={"date_parsed": "date"}))
             trend_data["date_str"] = pd.to_datetime(trend_data["date"]).dt.strftime("%Y-%m-%d")
@@ -322,10 +322,10 @@ elif menu == "功能 2：仅工作日":
                 fig = px.line(group_data, x="date_str", y="importcount", color="provider_label",
                               labels={"provider_label": "Provider", "importcount": "汇入数量", "date_str": "日期"},
                               title="")
-                # 显示每日日期标签
                 fig.update_xaxes(type="category", categoryorder="category ascending", tickangle=-45)
                 st.plotly_chart(fig, use_container_width=True)
 
+            # ✅ 修复缩进：确保 if 块内部有语句
             if all_group_data:
                 export_excel(pd.concat(all_group_data), "趋势_仅工作日.xlsx")
 
