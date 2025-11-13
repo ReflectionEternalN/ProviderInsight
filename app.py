@@ -9,7 +9,6 @@ from io import BytesIO
 # =========================
 st.set_page_config(page_title="MSN Provider Insight", layout="wide")
 
-# 样式：主标题顶格加大；功能页标题加大；说明文字隐藏（保留样式不显示）
 st.markdown("""
 <style>
 .app-main-title h1 {
@@ -39,7 +38,7 @@ st.markdown("""
 st.markdown("<div class='app-main-title'><h1>MSN Provider Insight</h1></div>", unsafe_allow_html=True)
 
 # =========================
-# 菜单（四个顶级功能）
+# 菜单
 # =========================
 menu = st.sidebar.radio("选择功能", [
     "功能 1：单日分析",
@@ -49,16 +48,13 @@ menu = st.sidebar.radio("选择功能", [
 ])
 
 # =========================
-# 上传文件
+# 侧边栏：上传与参数
 # =========================
 st.sidebar.markdown("🗂️ 文件上传")
 provider_file = st.sidebar.file_uploader("上传 Provider ID & Name", type=["xlsx"])
 import_files = st.sidebar.file_uploader("上传汇入量文件", type=["xlsx"], accept_multiple_files=True)
 holidays_file = st.sidebar.file_uploader("上传节假日", type=["csv"])
 
-# =========================
-# 全局参数（报警阈值）
-# =========================
 st.sidebar.markdown("⚙️ 参数设置")
 alert_threshold_pct = st.sidebar.slider("报警阈值（%）", min_value=10, max_value=90, value=50, step=5)
 
@@ -87,7 +83,6 @@ def normalize_columns(df):
     return df
 
 def parse_date_series(s):
-    # 自动解析文件名/字符串为日期（支持 YYYY-MM-DD / YYYYMMDD）
     return pd.to_datetime(s, errors='coerce').dt.date
 
 def load_holidays_set(uploaded_csv) -> set:
@@ -122,18 +117,15 @@ def anomaly_alerts_block(df_daily: pd.DataFrame, title_latest_day: str, filename
         )
         return
 
-    # 历史均值
     hist_mean = (
         history_df.groupby(["providerid", "provider_label"], dropna=False)["importcount"]
         .mean().reset_index().rename(columns={"importcount": "hist_avg"})
     )
 
-    # 合并最新日
     compare_df = pd.merge(
         latest_df[["providerid", "provider_label", "date", "importcount"]],
         hist_mean, on=["providerid", "provider_label"], how="left"
     )
-    # 仅保留历史均值 > 500
     compare_df = compare_df[compare_df["hist_avg"] > 500].copy()
 
     compare_df["change_ratio"] = (compare_df["importcount"] - compare_df["hist_avg"]) / compare_df["hist_avg"]
@@ -185,19 +177,18 @@ def prepare_import_data(import_files, provider_map):
         for file in import_files:
             df = pd.read_excel(file)
             df = normalize_columns(df)
-            date_str = os.path.splitext(file.name)[0]  # 文件名作为日期来源
+            date_str = os.path.splitext(file.name)[0]
             df["date"] = date_str
             import_data = pd.concat([import_data, df], ignore_index=True)
 
     if import_data.empty:
         return import_data
 
-    # 校验列
     if "providerid" not in import_data.columns or "importcount" not in import_data.columns:
         st.error("汇入量文件需包含列：ProviderId 与 ImportCount")
         st.stop()
 
-    # 先解析 ProviderId 为字符串，过滤掉 BBPIRCh
+    # 统一字符串并过滤 BBPIRCh
     import_data["providerid_str"] = import_data["providerid"].astype(str)
     import_data = import_data[import_data["providerid_str"] != "BBPIRCh"].copy()
 
@@ -205,7 +196,7 @@ def prepare_import_data(import_files, provider_map):
     if not provider_map.empty:
         import_data = import_data.merge(provider_map, on="providerid", how="left")
 
-    # 展示标签（优先 providername，否则用 providerid_str）
+    # Provider 显示标签
     if "providername" in import_data.columns:
         import_data["provider_label"] = import_data["providername"].where(import_data["providername"].notna(),
                                                                          import_data["providerid_str"])
@@ -284,11 +275,9 @@ elif menu == "功能 2：仅工作日":
         if whitelist:
             df = df[df["provider_label"].isin(whitelist)].copy()
 
-        # 自动识别工作日：周一=0 ~ 周五=4
         df["weekday"] = pd.to_datetime(df["date_parsed"]).dt.weekday
-        df = df[df["weekday"] < 5].copy()
+        df = df[df["weekday"] < 5].copy()  # 周一~周五
 
-        # 可选：排除节假日
         use_holidays = st.checkbox("排除节假日", value=True, key="workdays_holiday_toggle")
         if use_holidays:
             if len(holidays_set) > 0:
@@ -299,12 +288,12 @@ elif menu == "功能 2：仅工作日":
         if df.empty:
             st.warning("无数据")
         else:
-            # 顶部异常报警
+            # 报警
             daily_import = (df.groupby(["providerid", "provider_label", "date_parsed"], dropna=False)["importcount"]
                             .sum().reset_index().rename(columns={"date_parsed": "date"}))
             anomaly_alerts_block(daily_import, "最新工作日", "仅工作日", alert_threshold_pct)
 
-            # 趋势图：X 轴显示每天日期（分类轴）
+            # 趋势图（每日日期全部显示）
             trend_data = (df.groupby(["date_parsed", "provider_label"], dropna=False)["importcount"]
                           .sum().reset_index().rename(columns={"date_parsed": "date"}))
             trend_data["date_str"] = pd.to_datetime(trend_data["date"]).dt.strftime("%Y-%m-%d")
@@ -325,8 +314,8 @@ elif menu == "功能 2：仅工作日":
                 fig.update_xaxes(type="category", categoryorder="category ascending", tickangle=-45)
                 st.plotly_chart(fig, use_container_width=True)
 
-            # ✅ 修复缩进：确保 if 块内部有语句
             if all_group_data:
+        # ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓ 这里务必保持缩进 ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
                 export_excel(pd.concat(all_group_data), "趋势_仅工作日.xlsx")
 
 # =========================
@@ -344,9 +333,8 @@ elif menu == "功能 3：仅周末":
         if whitelist:
             df = df[df["provider_label"].isin(whitelist)].copy()
 
-        # 自动识别周末：周六=5，周日=6
         df["weekday"] = pd.to_datetime(df["date_parsed"]).dt.weekday
-        df = df[df["weekday"] >= 5].copy()
+        df = df[df["weekday"] >= 5].copy()  # 周六/周日
 
         if df.empty:
             st.warning("无数据")
