@@ -5,20 +5,49 @@ import os
 from io import BytesIO
 
 # =========================
-# 页面配置与样式
+# 页面配置与样式（字号优化 + 图标友好）
 # =========================
 st.set_page_config(page_title="资讯平台数据分析", layout="wide")
 
-# 标题与各级标题字号缩小（约为默认的一半）
+# 全局样式：控制标题字号（适当增大），并提供自定义类
 st.markdown("""
 <style>
-h1 { font-size: 1.1rem !important; }
-h2 { font-size: 0.95rem !important; }
-h3 { font-size: 0.85rem !important; }
+/* 全局标题基础（适中） */
+h1 { font-size: 1.25rem !important; }
+h2 { font-size: 1.15rem !important; }
+h3 { font-size: 1.05rem !important; }
+
+/* 功能页顶端标题（增大约一半，突出每页主标题） */
+.page-title {
+    font-size: 1.60rem !important; /* 原基础上增大约一半 */
+    font-weight: 700;
+    margin: 0.25rem 0 0.75rem 0;
+}
+
+/* 功能描述（与功能页顶端标题同字号，简洁说明当前页） */
+.page-subtitle {
+    font-size: 1.60rem !important; /* 与 page-title 同字号 */
+    font-weight: 600;
+    color: #444;
+    margin: 0 0 0.75rem 0;
+}
+
+/* 报警区域的样式适当紧凑 */
+.alert-exclam { color: #d00000; font-weight: 800; font-size: 16px; margin-right: 6px; }
+.alert-line { font-size: 14px; line-height: 1.6; }
+.alert-box { padding: 8px 10px; background-color: #fff5f5; border-left: 4px solid #d00000; border-radius: 6px; margin-bottom: 12px; }
+
+/* 小标题（组别） */
+.section-title {
+    font-size: 1.05rem !important;
+    font-weight: 600;
+    margin: 0.5rem 0 0.5rem 0;
+}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("资讯平台文章审核数据分析")
+# 顶部主标题（适中）
+st.title("📊 资讯平台文章审核数据分析")
 
 # =========================
 # 菜单（四个顶级功能）
@@ -33,16 +62,16 @@ menu = st.sidebar.radio("选择功能", [
 # =========================
 # 上传文件
 # =========================
-st.sidebar.markdown("文件上传")
-provider_file = st.sidebar.file_uploader("上传 Provider 映射", type=["xlsx"])
+st.sidebar.markdown("🗂️ 文件上传")
+provider_file = st.sidebar.file_uploader("上传 Provider ID & Name", type=["xlsx"])
 import_files = st.sidebar.file_uploader("上传汇入量文件", type=["xlsx"], accept_multiple_files=True)
 holidays_file = st.sidebar.file_uploader("上传节假日", type=["csv"])
 
 # =========================
 # 全局参数（报警阈值）
 # =========================
-st.sidebar.markdown("参数设置")
-alert_threshold_pct = st.sidebar.slider("报警阈值", min_value=10, max_value=90, value=50, step=5)
+st.sidebar.markdown("⚙️ 参数设置")
+alert_threshold_pct = st.sidebar.slider("报警阈值（%）", min_value=10, max_value=90, value=50, step=5)
 
 # =========================
 # 工具函数
@@ -61,7 +90,7 @@ def export_excel(df, filename):
         st.stop()
     with writer:
         df.to_excel(writer, index=False, sheet_name='Sheet1')
-    st.download_button("下载结果", output.getvalue(), file_name=filename,
+    st.download_button("📥 下载结果", output.getvalue(), file_name=filename,
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 def normalize_columns(df):
@@ -96,14 +125,7 @@ def anomaly_alerts_block(df_daily: pd.DataFrame, title_latest_day: str, filename
     latest_df = df_daily[df_daily["date"] == latest_date].copy()
     history_df = df_daily[df_daily["date"] < latest_date].copy()
 
-    st.markdown("""
-        <style>
-        .alert-exclam { color: #d00000; font-weight: 800; font-size: 16px; margin-right: 6px; }
-        .alert-line { font-size: 14px; line-height: 1.6; }
-        .alert-box { padding: 8px 10px; background-color: #fff5f5; border-left: 4px solid #d00000; border-radius: 6px; margin-bottom: 12px; }
-        </style>
-    """, unsafe_allow_html=True)
-
+    # 报警区域样式已在全局 CSS 定义
     if history_df.empty:
         st.markdown(
             f"<div class='alert-box'>仅有{title_latest_day} {pd.to_datetime(latest_date).strftime('%Y/%m/%d')}，无历史对比</div>",
@@ -136,7 +158,7 @@ def anomaly_alerts_block(df_daily: pd.DataFrame, title_latest_day: str, filename
         )
     else:
         st.markdown(
-            f"<div class='alert-box'><b>🚩 异常报警（阈值 {threshold_pct}%）</b><br/>",
+            f"<div class='alert-box'><b>🚨 异常报警（阈值 {threshold_pct}%）</b><br/>",
             unsafe_allow_html=True
         )
         for _, row in alerts_df.sort_values(by="change_ratio", key=lambda s: s.abs(), ascending=False).iterrows():
@@ -221,7 +243,9 @@ holidays_set = load_holidays_set(holidays_file)
 # 功能 1：单日分析
 # =========================
 if menu == "功能 1：单日分析":
-    st.subheader("单日分析")
+    st.markdown("<div class='page-title'>🗓️📊 单日分析</div>", unsafe_allow_html=True)
+    st.markdown("<div class='page-subtitle'>单日数据总览</div>", unsafe_allow_html=True)
+
     if import_data.empty:
         st.warning("请上传汇入量文件")
     else:
@@ -239,9 +263,7 @@ if menu == "功能 1：单日分析":
             provider_counts = provider_counts.rename(columns={"provider_label": "提供方", "importcount": "汇入数量"})
 
             st.dataframe(provider_counts, use_container_width=True)
-
-            fig = px.bar(provider_counts, x="提供方", y="汇入数量",
-                         title=f"{selected_date_str} 汇入数量")
+            fig = px.bar(provider_counts, x="提供方", y="汇入数量", title=f"{selected_date_str} 汇入数量")
             st.plotly_chart(fig, use_container_width=True)
 
             export_excel(provider_counts, f"单日_汇入_{selected_date_str}.xlsx")
@@ -250,7 +272,9 @@ if menu == "功能 1：单日分析":
 # 功能 2：仅工作日
 # =========================
 elif menu == "功能 2：仅工作日":
-    st.subheader("仅工作日")
+    st.markdown("<div class='page-title'>🧑‍💼📈 仅工作日</div>", unsafe_allow_html=True)
+    st.markdown("<div class='page-subtitle'>仅统计周一至周五</div>", unsafe_allow_html=True)
+
     if import_data.empty:
         st.warning("请上传汇入量文件")
     else:
@@ -288,7 +312,7 @@ elif menu == "功能 2：仅工作日":
 
             all_group_data = []
             for idx, group in enumerate(provider_groups, start=1):
-                st.markdown(f"第 {idx} 组")
+                st.markdown(f"<div class='section-title'>📈 第 {idx} 组</div>", unsafe_allow_html=True)
                 group_data = trend_data[trend_data["provider_label"].isin(group)]
                 all_group_data.append(group_data)
                 fig = px.line(group_data, x="date", y="importcount", color="provider_label",
@@ -302,7 +326,9 @@ elif menu == "功能 2：仅工作日":
 # 功能 3：仅周末
 # =========================
 elif menu == "功能 3：仅周末":
-    st.subheader("仅周末")
+    st.markdown("<div class='page-title'>🛌📈 仅周末</div>", unsafe_allow_html=True)
+    st.markdown("<div class='page-subtitle'>仅统计周六与周日</div>", unsafe_allow_html=True)
+
     if import_data.empty:
         st.warning("请上传汇入量文件")
     else:
@@ -333,7 +359,7 @@ elif menu == "功能 3：仅周末":
 
             all_group_data = []
             for idx, group in enumerate(provider_groups, start=1):
-                st.markdown(f"第 {idx} 组")
+                st.markdown(f"<div class='section-title'>📈 第 {idx} 组</div>", unsafe_allow_html=True)
                 group_data = trend_data[trend_data["provider_label"].isin(group)]
                 all_group_data.append(group_data)
                 fig = px.line(group_data, x="date", y="importcount", color="provider_label",
@@ -347,7 +373,9 @@ elif menu == "功能 3：仅周末":
 # 功能 4：全部数据
 # =========================
 elif menu == "功能 4：全部数据":
-    st.subheader("全部数据")
+    st.markdown("<div class='page-title'>📚📈 全部数据</div>", unsafe_allow_html=True)
+    st.markdown("<div class='page-subtitle'>统计全部上传数据</div>", unsafe_allow_html=True)
+
     if import_data.empty:
         st.warning("请上传汇入量文件")
     else:
@@ -375,7 +403,7 @@ elif menu == "功能 4：全部数据":
 
             all_group_data = []
             for idx, group in enumerate(provider_groups, start=1):
-                st.markdown(f"第 {idx} 组")
+                st.markdown(f"<div class='section-title'>📈 第 {idx} 组</div>", unsafe_allow_html=True)
                 group_data = trend_data[trend_data["provider_label"].isin(group)]
                 all_group_data.append(group_data)
                 fig = px.line(group_data, x="date", y="importcount", color="provider_label",
