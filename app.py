@@ -56,7 +56,8 @@ import_files = st.sidebar.file_uploader("上传汇入量文件", type=["xlsx"], 
 holidays_file = st.sidebar.file_uploader("上传节假日", type=["csv"])
 
 st.sidebar.markdown("⚙️ 参数设置")
-alert_threshold_pct = st.sidebar.slider("报警阈值（%）", min_value=10, max_value=90, value=50, step=5)
+# 报警阈值：最低 5%，上限不设限
+alert_threshold_pct = st.sidebar.number_input("报警阈值（%）", min_value=5.0, value=50.0, step=1.0, format="%.1f")
 
 # =========================
 # 工具函数
@@ -101,75 +102,9 @@ def load_holidays_set(uploaded_csv) -> set:
         st.error(f"读取节假日文件失败：{e}")
         return set()
 
-def anomaly_alerts_block(df_daily: pd.DataFrame, title_latest_day: str, filename_prefix: str, threshold_pct: float):
-    if df_daily.empty or df_daily["date"].isna().all():
-        st.warning("无可用日期数据")
-        return
-
-    latest_date = df_daily["date"].max()
-    latest_df = df_daily[df_daily["date"] == latest_date].copy()
-    history_df = df_daily[df_daily["date"] < latest_date].copy()
-
-    if history_df.empty:
-        st.markdown(
-            f"<div class='alert-box'>仅有{title_latest_day} {pd.to_datetime(latest_date).strftime('%Y/%m/%d')}，无历史对比</div>",
-            unsafe_allow_html=True
-        )
-        return
-
-    hist_mean = (
-        history_df.groupby(["providerid", "provider_label"], dropna=False)["importcount"]
-        .mean().reset_index().rename(columns={"importcount": "hist_avg"})
-    )
-
-    compare_df = pd.merge(
-        latest_df[["providerid", "provider_label", "date", "importcount"]],
-        hist_mean, on=["providerid", "provider_label"], how="left"
-    )
-    compare_df = compare_df[compare_df["hist_avg"] > 500].copy()
-
-    compare_df["change_ratio"] = (compare_df["importcount"] - compare_df["hist_avg"]) / compare_df["hist_avg"]
-    compare_df["direction"] = compare_df["change_ratio"].apply(lambda x: "上升" if x >= 0 else "降低")
-    compare_df["change_pct"] = (compare_df["change_ratio"] * 100).round(2)
-
-    threshold_ratio = float(threshold_pct) / 100.0
-    alerts_df = compare_df[compare_df["change_ratio"].abs() >= threshold_ratio].copy()
-
-    if alerts_df.empty:
-        st.markdown(
-            f"<div class='alert-box'>✅ {title_latest_day} {pd.to_datetime(latest_date).strftime('%Y/%m/%d')} 未发现异常</div>",
-            unsafe_allow_html=True
-        )
-    else:
-        st.markdown(
-            f"<div class='alert-box'><b>🚨 异常报警（阈值 {threshold_pct}%）</b><br/>",
-            unsafe_allow_html=True
-        )
-        for _, row in alerts_df.sort_values(by="change_ratio", key=lambda s: s.abs(), ascending=False).iterrows():
-            date_str = pd.to_datetime(row["date"]).strftime("%Y/%m/%d")
-            msg = f"<span class='alert-exclam'>！</span><span class='alert-line'>{row['provider_label']} 在 {date_str} 的汇入量异常{row['direction']}</span>"
-            st.markdown(msg, unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        show_cols = ["providerid", "provider_label", "date", "importcount", "hist_avg", "change_pct", "direction"]
-        pretty_df = alerts_df[show_cols].copy()
-        pretty_df = pretty_df.rename(columns={
-            "providerid": "ProviderId",
-            "provider_label": "Provider",
-            "date": "日期",
-            "importcount": "最新日汇入量",
-            "hist_avg": "过往均值",
-            "change_pct": "变化百分比",
-            "direction": "方向"
-        })
-        pretty_df["日期"] = pd.to_datetime(pretty_df["日期"]).dt.strftime("%Y/%m/%d")
-        with st.expander("查看异常明细", expanded=False):
-            st.dataframe(pretty_df, use_container_width=True)
-            export_excel(pretty_df, f"{filename_prefix}_异常_{pd.to_datetime(latest_date).strftime('%Y%m%d')}.xlsx")
-
 def prepare_import_data(import_files, provider_map):
     """
-    读取上传的 import xlsx 文件，合并 provider_map，解析日期，构造 provider_label，
+    读取上传的 import xlsx，合并 provider_map，解析日期，构造 provider_label，
     并忽略 ProviderId == 'BBPIRCh' 的全部数据。
     """
     import_data = pd.DataFrame()
@@ -196,7 +131,7 @@ def prepare_import_data(import_files, provider_map):
     if not provider_map.empty:
         import_data = import_data.merge(provider_map, on="providerid", how="left")
 
-    # Provider 显示标签
+    # Provider 显示标签（优先 providername，否则用 providerid_str）
     if "providername" in import_data.columns:
         import_data["provider_label"] = import_data["providername"].where(import_data["providername"].notna(),
                                                                          import_data["providerid_str"])
@@ -210,6 +145,34 @@ def prepare_import_data(import_files, provider_map):
         import_data = import_data[~import_data["date_parsed"].isna()].copy()
 
     return import_data
+
+def filter_cn_named(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    仅保留有中文 ProviderName 的记录（用于功能 2/3/4）。
+    无映射时（无 providername 列）返回空，以满足“只有 ID 的排除不用统计”的要求。
+    """
+    if df.empty:
+        return df
+    if "providername" not in df.columns:
+        return df.iloc[0:0].copy()
+    mask = df["providername"].notna() & (df["providername"].astype(str).str.strip() != "")
+    return df[mask].copy()
+
+def plot_grouped_trends(trend_data: pd.DataFrame, providers_sorted: list, group_size: int, export_name: str):
+    """分组绘图（X 轴每日显示），并导出 Excel"""
+    provider_groups = [providers_sorted[i:i+group_size] for i in range(0, len(providers_sorted), group_size)]
+    all_group_data = []
+    for idx, group in enumerate(provider_groups, start=1):
+        st.markdown(f"<div class='section-title'>📈 第 {idx} 组</div>", unsafe_allow_html=True)
+        group_data = trend_data[trend_data["provider_label"].isin(group)].copy()
+        all_group_data.append(group_data)
+        fig = px.line(group_data, x="date_str", y="importcount", color="provider_label",
+                      labels={"provider_label": "Provider", "importcount": "汇入数量", "date_str": "日期"},
+                      title="")
+        fig.update_xaxes(type="category", categoryorder="category ascending", tickangle=-45)
+        st.plotly_chart(fig, use_container_width=True)
+    if all_group_data:
+        export_excel(pd.concat(all_group_data), export_name)
 
 # =========================
 # Provider 映射
@@ -234,7 +197,93 @@ import_data = prepare_import_data(import_files, provider_map)
 holidays_set = load_holidays_set(holidays_file)
 
 # =========================
-# 功能 1：单日分析
+# 报警逻辑（最新一天 vs 前一天；最新一天 > 500 才判定）
+# =========================
+def anomaly_alerts_block_dod_latest_gt500(df_daily: pd.DataFrame, title_latest_day: str, filename_prefix: str, threshold_pct: float):
+    """
+    DoD 报警：
+    - 仅对“最新一天汇入量 > 500”的 Provider 参与判断；
+    - 条件：|最新 - 前一日| / 前一日 ≥ 阈值；
+    - 前一日=0 且最新>500，视为变化无限大（判为“升高”）。
+    """
+    if df_daily.empty or df_daily["date"].isna().all():
+        st.warning("无可用日期数据")
+        return
+
+    dates_sorted = sorted(df_daily["date"].dropna().unique())
+    if len(dates_sorted) < 2:
+        st.markdown("<div class='alert-box'>数据不足 2 天，无法进行与前一天的比较</div>", unsafe_allow_html=True)
+        return
+
+    latest_date = dates_sorted[-1]
+    prev_date = dates_sorted[-2]
+
+    latest_df = (df_daily[df_daily["date"] == latest_date]
+                 .groupby(["providerid", "provider_label"], dropna=False)["importcount"]
+                 .sum().reset_index().rename(columns={"importcount": "latest_count"}))
+    prev_df = (df_daily[df_daily["date"] == prev_date]
+               .groupby(["providerid", "provider_label"], dropna=False)["importcount"]
+               .sum().reset_index().rename(columns={"importcount": "prev_count"}))
+
+    comp = pd.merge(latest_df, prev_df, on=["providerid", "provider_label"], how="left")
+
+    # 仅保留“最新一天 > 500”的 Provider
+    comp = comp[comp["latest_count"] > 500].copy()
+
+    if comp.empty:
+        st.markdown(
+            f"<div class='alert-box'>✅ {title_latest_day}（{pd.to_datetime(latest_date).strftime('%Y/%m/%d')}）无满足基线条件（最新>500）的 Provider</div>",
+            unsafe_allow_html=True
+        )
+        return
+
+    # 计算相对变化
+    def calc_ratio(row):
+        prev = row["prev_count"] if pd.notna(row["prev_count"]) else 0
+        now = row["latest_count"]
+        if prev == 0:
+            return float("inf") if now > 0 else 0.0
+        return (now - prev) / prev
+
+    comp["change_ratio"] = comp.apply(calc_ratio, axis=1)
+    comp["direction"] = comp.apply(lambda r: "升高" if r["latest_count"] >= (r["prev_count"] if pd.notna(r["prev_count"]) else 0) else "减少", axis=1)
+    threshold_ratio = float(threshold_pct) / 100.0
+    alerts_df = comp[comp["change_ratio"].abs() >= threshold_ratio].copy()
+
+    # 顶部总标题（提示比较的两天）
+    st.markdown(
+        f"<div class='alert-box'><b>🚨 异常报警（{title_latest_day}：{pd.to_datetime(latest_date).strftime('%Y/%m/%d')} 对比 {pd.to_datetime(prev_date).strftime('%Y/%m/%d')}，阈值 {threshold_pct:.1f}%）</b></div>",
+        unsafe_allow_html=True
+    )
+
+    if alerts_df.empty:
+        st.markdown("<div class='alert-box'>✅ 未发现异常波动（满足条件的 Provider）</div>", unsafe_allow_html=True)
+    else:
+        # 每个 Provider 一行，格式：警灯icon + 异常报警 + XX Provider最新一天汇入量异常升高/减少
+        for _, row in alerts_df.sort_values(by="change_ratio", key=lambda s: s.abs(), ascending=False).iterrows():
+            msg = f"🚨异常报警 {row['provider_label']}最新一天汇入量异常{row['direction']}"
+            st.markdown(f"<div class='alert-line'>{msg}</div>", unsafe_allow_html=True)
+
+        # 明细导出（可选）
+        pretty = alerts_df.copy()
+        pretty = pretty.rename(columns={
+            "providerid": "ProviderId",
+            "provider_label": "Provider",
+            "latest_count": "最新日汇入量",
+            "prev_count": "前一日汇入量",
+        })
+        pretty["最新日期"] = pd.to_datetime(latest_date).strftime("%Y/%m/%d")
+        pretty["前一日期"] = pd.to_datetime(prev_date).strftime("%Y/%m/%d")
+        pretty["变化比例"] = pretty["change_ratio"].apply(lambda x: "∞" if x == float("inf") else f"{(x*100):.2f}%")
+
+        cols = ["ProviderId", "Provider", "前一日期", "前一日汇入量", "最新日期", "最新日汇入量", "变化比例", "direction"]
+        pretty = pretty[cols]
+        with st.expander("查看报警明细", expanded=False):
+            st.dataframe(pretty, use_container_width=True)
+            export_excel(pretty, f"{filename_prefix}_报警明细_{pd.to_datetime(latest_date).strftime('%Y%m%d')}.xlsx")
+
+# =========================
+# 功能 1：单日分析（保持不变）
 # =========================
 if menu == "功能 1：单日分析":
     st.markdown("<div class='page-title'>🗓️📊 单日分析</div>", unsafe_allow_html=True)
@@ -261,23 +310,19 @@ if menu == "功能 1：单日分析":
             export_excel(provider_counts, f"单日_汇入_{selected_date_str}.xlsx")
 
 # =========================
-# 功能 2：仅工作日
+# 功能 2：仅工作日（最新日排序分组，每 10 个一组）
 # =========================
 elif menu == "功能 2：仅工作日":
     st.markdown("<div class='page-title'>🧑‍💼📈 仅工作日</div>", unsafe_allow_html=True)
     if import_data.empty:
         st.warning("请上传汇入量文件")
     else:
-        all_providers = sorted(import_data["provider_label"].dropna().unique().tolist())
-        whitelist = st.sidebar.multiselect("Provider 筛选", options=all_providers, default=[])
-
         df = import_data.copy()
-        if whitelist:
-            df = df[df["provider_label"].isin(whitelist)].copy()
-
+        # 仅工作日
         df["weekday"] = pd.to_datetime(df["date_parsed"]).dt.weekday
-        df = df[df["weekday"] < 5].copy()  # 周一~周五
+        df = df[df["weekday"] < 5].copy()
 
+        # 排除节假日（可选）
         use_holidays = st.checkbox("排除节假日", value=True, key="workdays_holiday_toggle")
         if use_holidays:
             if len(holidays_set) > 0:
@@ -285,128 +330,117 @@ elif menu == "功能 2：仅工作日":
             else:
                 st.info("未提供节假日文件")
 
+        # 仅中文 ProviderName
+        df = filter_cn_named(df)
         if df.empty:
             st.warning("无数据")
         else:
-            # 报警
-            daily_import = (df.groupby(["providerid", "provider_label", "date_parsed"], dropna=False)["importcount"]
-                            .sum().reset_index().rename(columns={"date_parsed": "date"}))
-            anomaly_alerts_block(daily_import, "最新工作日", "仅工作日", alert_threshold_pct)
+            # 白名单（中文）
+            all_providers = sorted(df["provider_label"].dropna().unique().tolist())
+            whitelist = st.sidebar.multiselect("Provider 筛选", options=all_providers, default=[])
+            if whitelist:
+                df = df[df["provider_label"].isin(whitelist)].copy()
 
-            # 趋势图（每日日期全部显示）
-            trend_data = (df.groupby(["date_parsed", "provider_label"], dropna=False)["importcount"]
-                          .sum().reset_index().rename(columns={"date_parsed": "date"}))
-            trend_data["date_str"] = pd.to_datetime(trend_data["date"]).dt.strftime("%Y-%m-%d")
+            if df.empty:
+                st.warning("无数据")
+            else:
+                # 顶部报警：最新 vs 前一天（最新>500）
+                daily_import = (df.groupby(["providerid", "provider_label", "date_parsed"], dropna=False)["importcount"]
+                                .sum().reset_index().rename(columns={"date_parsed": "date"}))
+                anomaly_alerts_block_dod_latest_gt500(daily_import, "最新工作日", "仅工作日", alert_threshold_pct)
 
-            provider_total = trend_data.groupby("provider_label")["importcount"].sum().sort_values(ascending=False)
-            providers_sorted = provider_total.index.tolist()
-            group_size = 10
-            provider_groups = [providers_sorted[i:i+group_size] for i in range(0, len(providers_sorted), group_size)]
+                # 分组排序依据：最新一天汇入量
+                latest_date = daily_import["date"].max()
+                latest_day_counts = (daily_import[daily_import["date"] == latest_date]
+                                     .groupby("provider_label", dropna=False)["importcount"]
+                                     .sum().sort_values(ascending=False))
+                providers_sorted = latest_day_counts.index.tolist()
+                if not providers_sorted:
+                    provider_total = df.groupby("provider_label", dropna=False)["importcount"].sum().sort_values(ascending=False)
+                    providers_sorted = provider_total.index.tolist()
 
-            all_group_data = []
-            for idx, group in enumerate(provider_groups, start=1):
-                st.markdown(f"<div class='section-title'>📈 第 {idx} 组</div>", unsafe_allow_html=True)
-                group_data = trend_data[trend_data["provider_label"].isin(group)].copy()
-                all_group_data.append(group_data)
-                fig = px.line(group_data, x="date_str", y="importcount", color="provider_label",
-                              labels={"provider_label": "Provider", "importcount": "汇入数量", "date_str": "日期"},
-                              title="")
-                fig.update_xaxes(type="category", categoryorder="category ascending", tickangle=-45)
-                st.plotly_chart(fig, use_container_width=True)
+                # 趋势数据 & 每日日期字符串
+                trend_data = (df.groupby(["date_parsed", "provider_label"], dropna=False)["importcount"]
+                              .sum().reset_index().rename(columns={"date_parsed": "date"}))
+                trend_data["date_str"] = pd.to_datetime(trend_data["date"]).dt.strftime("%Y-%m-%d")
 
-            # ←←← 这里是之前报错的位置，务必确保缩进存在
-            if all_group_data:
-                export_excel(pd.concat(all_group_data), "趋势_仅工作日.xlsx")
+                # 绘图与导出
+                plot_grouped_trends(trend_data, providers_sorted, group_size=10, export_name="趋势_仅工作日.xlsx")
 
 # =========================
-# 功能 3：仅周末
+# 功能 3：仅周末（总量排序分组）
 # =========================
 elif menu == "功能 3：仅周末":
     st.markdown("<div class='page-title'>🛌📈 仅周末</div>", unsafe_allow_html=True)
     if import_data.empty:
         st.warning("请上传汇入量文件")
     else:
-        all_providers = sorted(import_data["provider_label"].dropna().unique().tolist())
-        whitelist = st.sidebar.multiselect("Provider 筛选", options=all_providers, default=[], key="wl_weekends")
-
         df = import_data.copy()
-        if whitelist:
-            df = df[df["provider_label"].isin(whitelist)].copy()
-
+        # 仅周末
         df["weekday"] = pd.to_datetime(df["date_parsed"]).dt.weekday
-        df = df[df["weekday"] >= 5].copy()  # 周六/周日
+        df = df[df["weekday"] >= 5].copy()
 
+        # 仅中文 ProviderName
+        df = filter_cn_named(df)
         if df.empty:
             st.warning("无数据")
         else:
-            daily_import = (df.groupby(["providerid", "provider_label", "date_parsed"], dropna=False)["importcount"]
-                            .sum().reset_index().rename(columns={"date_parsed": "date"}))
-            anomaly_alerts_block(daily_import, "最新周末日", "仅周末", alert_threshold_pct)
+            # 白名单（中文）
+            all_providers = sorted(df["provider_label"].dropna().unique().tolist())
+            whitelist = st.sidebar.multiselect("Provider 筛选", options=all_providers, default=[], key="wl_weekends")
+            if whitelist:
+                df = df[df["provider_label"].isin(whitelist)].copy()
 
-            trend_data = (df.groupby(["date_parsed", "provider_label"], dropna=False)["importcount"]
-                          .sum().reset_index().rename(columns={"date_parsed": "date"}))
-            trend_data["date_str"] = pd.to_datetime(trend_data["date"]).dt.strftime("%Y-%m-%d")
+            if df.empty:
+                st.warning("无数据")
+            else:
+                # 顶部报警：最新 vs 前一天（最新>500）
+                daily_import = (df.groupby(["providerid", "provider_label", "date_parsed"], dropna=False)["importcount"]
+                                .sum().reset_index().rename(columns={"date_parsed": "date"}))
+                anomaly_alerts_block_dod_latest_gt500(daily_import, "最新周末日", "仅周末", alert_threshold_pct)
 
-            provider_total = trend_data.groupby("provider_label")["importcount"].sum().sort_values(ascending=False)
-            providers_sorted = provider_total.index.tolist()
-            group_size = 10
-            provider_groups = [providers_sorted[i:i+group_size] for i in range(0, len(providers_sorted), group_size)]
+                # 分组：总量排序
+                trend_data = (df.groupby(["date_parsed", "provider_label"], dropna=False)["importcount"]
+                              .sum().reset_index().rename(columns={"date_parsed": "date"}))
+                trend_data["date_str"] = pd.to_datetime(trend_data["date"]).dt.strftime("%Y-%m-%d")
+                provider_total = trend_data.groupby("provider_label")["importcount"].sum().sort_values(ascending=False)
+                providers_sorted = provider_total.index.tolist()
 
-            all_group_data = []
-            for idx, group in enumerate(provider_groups, start=1):
-                st.markdown(f"<div class='section-title'>📈 第 {idx} 组</div>", unsafe_allow_html=True)
-                group_data = trend_data[trend_data["provider_label"].isin(group)].copy()
-                all_group_data.append(group_data)
-                fig = px.line(group_data, x="date_str", y="importcount", color="provider_label",
-                              labels={"provider_label": "Provider", "importcount": "汇入数量", "date_str": "日期"},
-                              title="")
-                fig.update_xaxes(type="category", categoryorder="category ascending", tickangle=-45)
-                st.plotly_chart(fig, use_container_width=True)
-
-            if all_group_data:
-                export_excel(pd.concat(all_group_data), "趋势_仅周末.xlsx")
+                plot_grouped_trends(trend_data, providers_sorted, group_size=10, export_name="趋势_仅周末.xlsx")
 
 # =========================
-# 功能 4：全部数据
+# 功能 4：全部数据（总量排序分组）
 # =========================
 elif menu == "功能 4：全部数据":
     st.markdown("<div class='page-title'>📚📈 全部数据</div>", unsafe_allow_html=True)
     if import_data.empty:
         st.warning("请上传汇入量文件")
     else:
-        all_providers = sorted(import_data["provider_label"].dropna().unique().tolist())
-        whitelist = st.sidebar.multiselect("Provider 筛选", options=all_providers, default=[], key="wl_all")
-
         df = import_data.copy()
-        if whitelist:
-            df = df[df["provider_label"].isin(whitelist)].copy()
-
+        # 仅中文 ProviderName
+        df = filter_cn_named(df)
         if df.empty:
             st.warning("无数据")
         else:
-            daily_import = (df.groupby(["providerid", "provider_label", "date_parsed"], dropna=False)["importcount"]
-                            .sum().reset_index().rename(columns={"date_parsed": "date"}))
-            anomaly_alerts_block(daily_import, "最新一天", "全部数据", alert_threshold_pct)
+            # 白名单（中文）
+            all_providers = sorted(df["provider_label"].dropna().unique().tolist())
+            whitelist = st.sidebar.multiselect("Provider 筛选", options=all_providers, default=[], key="wl_all")
+            if whitelist:
+                df = df[df["provider_label"].isin(whitelist)].copy()
 
-            trend_data = (df.groupby(["date_parsed", "provider_label"], dropna=False)["importcount"]
-                          .sum().reset_index().rename(columns={"date_parsed": "date"}))
-            trend_data["date_str"] = pd.to_datetime(trend_data["date"]).dt.strftime("%Y-%m-%d")
+            if df.empty:
+                st.warning("无数据")
+            else:
+                # 顶部报警：最新 vs 前一天（最新>500）
+                daily_import = (df.groupby(["providerid", "provider_label", "date_parsed"], dropna=False)["importcount"]
+                                .sum().reset_index().rename(columns={"date_parsed": "date"}))
+                anomaly_alerts_block_dod_latest_gt500(daily_import, "最新一天", "全部数据", alert_threshold_pct)
 
-            provider_total = trend_data.groupby("provider_label")["importcount"].sum().sort_values(ascending=False)
-            providers_sorted = provider_total.index.tolist()
-            group_size = 10
-            provider_groups = [providers_sorted[i:i+group_size] for i in range(0, len(providers_sorted), group_size)]
+                # 分组：总量排序
+                trend_data = (df.groupby(["date_parsed", "provider_label"], dropna=False)["importcount"]
+                              .sum().reset_index().rename(columns={"date_parsed": "date"}))
+                trend_data["date_str"] = pd.to_datetime(trend_data["date"]).dt.strftime("%Y-%m-%d")
+                provider_total = trend_data.groupby("provider_label")["importcount"].sum().sort_values(ascending=False)
+                providers_sorted = provider_total.index.tolist()
 
-            all_group_data = []
-            for idx, group in enumerate(provider_groups, start=1):
-                st.markdown(f"<div class='section-title'>📈 第 {idx} 组</div>", unsafe_allow_html=True)
-                group_data = trend_data[trend_data["provider_label"].isin(group)].copy()
-                all_group_data.append(group_data)
-                fig = px.line(group_data, x="date_str", y="importcount", color="provider_label",
-                              labels={"provider_label": "Provider", "importcount": "汇入数量", "date_str": "日期"},
-                              title="")
-                fig.update_xaxes(type="category", categoryorder="category ascending", tickangle=-45)
-                st.plotly_chart(fig, use_container_width=True)
-
-            if all_group_data:
-                export_excel(pd.concat(all_group_data), "趋势_全部数据.xlsx")
+                plot_grouped_trends(trend_data, providers_sorted, group_size=10, export_name="趋势_全部数据.xlsx")
